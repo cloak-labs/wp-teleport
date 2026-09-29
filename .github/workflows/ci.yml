@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test -race ./...
+      - name: Fuzz the SQL rewriter
+        run: |
+          go test ./internal/sqlstream -run '^$' -fuzz FuzzEscapeRoundTrip -fuzztime 30s
+          go test ./internal/sqlstream -run '^$' -fuzz FuzzSerialized -fuzztime 30s
+      - run: go build ./cmd/teleport

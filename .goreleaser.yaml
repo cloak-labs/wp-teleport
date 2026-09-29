@@ -1,0 +1,60 @@
+version: 2
+
+project_name: wp-teleport
+
+before:
+  hooks:
+    - go mod tidy
+    - mkdir -p completions
+    - go run ./cmd/teleport completion bash > completions/teleport.bash
+    - go run ./cmd/teleport completion zsh > completions/teleport.zsh
+    - go run ./cmd/teleport completion fish > completions/teleport.fish
+
+builds:
+  - id: teleport
+    main: ./cmd/teleport
+    binary: teleport
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files: [LICENSE, README.md, completions*]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude: ["^docs:", "^test:", "^ci:"]
+
+brews:
+  - name: wp-teleport
+    repository:
+      owner: cloak-labs
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: https://github.com/cloak-labs/wp-teleport
+    description: Fast WordPress database and file migrations over SSH
+    license: MIT
+    dependencies:
+      - name: rsync
+      - name: zstd
+    install: |
+      bin.install "teleport"
+      bin.install_symlink "teleport" => "wpt"
+      bash_completion.install "completions/teleport.bash" => "teleport"
+      zsh_completion.install "completions/teleport.zsh" => "_teleport"
+      fish_completion.install "completions/teleport.fish"
+    extra_files:
+      - source: completions/*
+
+    test: |
+      system "#{bin}/teleport", "--version"

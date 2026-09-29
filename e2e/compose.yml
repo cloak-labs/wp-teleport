@@ -1,0 +1,42 @@
+name: teleport-e2e
+
+x-db: &db
+  environment:
+    MYSQL_ROOT_PASSWORD: root
+    MYSQL_DATABASE: wp
+    MYSQL_USER: wp
+    MYSQL_PASSWORD: wp
+    MARIADB_ROOT_PASSWORD: root
+    MARIADB_DATABASE: wp
+    MARIADB_USER: wp
+    MARIADB_PASSWORD: wp
+  healthcheck:
+    test: ["CMD-SHELL", "mysqladmin ping -uroot -proot 2>/dev/null || mariadb-admin ping -uroot -proot"]
+    interval: 2s
+    retries: 60
+
+x-server: &server
+  build: .
+  volumes:
+    - ./.work/keys:/keys:ro
+
+services:
+  src-db:
+    <<: *db
+    image: ${SRC_DB_IMAGE:-mysql:8.0}
+  dst-db:
+    <<: *db
+    image: ${DST_DB_IMAGE:-mariadb:10.11}
+
+  src:
+    <<: *server
+    hostname: src
+    ports: ["127.0.0.1:2201:22"]
+    depends_on:
+      src-db: { condition: service_healthy }
+  dst:
+    <<: *server
+    hostname: dst
+    ports: ["127.0.0.1:2202:22"]
+    depends_on:
+      dst-db: { condition: service_healthy }

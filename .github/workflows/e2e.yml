@@ -1,0 +1,32 @@
+name: E2E
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [single, multisite]
+        db:
+          - { src: "mysql:8.0", dst: "mysql:8.0" }
+          - { src: "mysql:8.0", dst: "mariadb:10.6" }
+          - { src: "mariadb:10.11", dst: "mysql:8.0" }
+          - { src: "mariadb:10.11", dst: "mariadb:11.4" }
+          - { src: "mysql:8.0", dst: "mariadb:11.4" }
+    name: ${{ matrix.mode }} ${{ matrix.db.src }} -> ${{ matrix.db.dst }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: sudo apt-get update && sudo apt-get install -y rsync zstd
+      - run: e2e/run.sh
+        env:
+          MODE: ${{ matrix.mode }}
+          SRC_DB_IMAGE: ${{ matrix.db.src }}
+          DST_DB_IMAGE: ${{ matrix.db.dst }}

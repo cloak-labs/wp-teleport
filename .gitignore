@@ -1,0 +1,5 @@
+/dist/
+.teleport/
+/e2e/.work/
+/completions/
+
