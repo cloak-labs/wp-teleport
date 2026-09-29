@@ -20,11 +20,11 @@ WP Migrate DB Pro sends data through PHP over HTTP in small chunks, and a migrat
 - **Atomic.** Tables are imported under temporary names and swapped in with a single `RENAME TABLE`. Visitors never see a half-imported site, and an interrupted run leaves the live site untouched.
 - **Rollback.** The replaced tables are kept (the last 3 runs by default), so `teleport rollback <env>` gets you back in seconds.
 - **Serialization-safe find and replace in the stream.** URLs, paths, table prefixes and multisite IDs are rewritten while the dump flows through. PHP serialized strings get their lengths fixed, and JSON-escaped URLs (for example in block attributes) are handled too.
-- **Deltas.** Tables whose checksums have not changed on either side since the last run are skipped. Files move with rsync (parallel shards; tar+zstd for the first copy into an empty folder). Between two servers, files go directly from server to server instead of through your laptop.
+- **Deltas.** Tables whose checksums have not changed on either side since the last run are skipped. Files move with rsync (parallel shards; tar+zstd for the first copy into an empty folder). Between two servers, files go directly from server to server instead of through your machine.
 - **Multisite that makes sense.** Subsites are matched by path, not by ID, because IDs almost never agree across environments. Copy one site into another (`--as`), create it on the way (`--create-site`), or move the whole network (`--network`).
 - **Guardrails.** Protected environments require you to type their name (or pass `--confirm` / `TELEPORT_CONFIRM`). Each environment has a lock so two migrations can't collide. teleport refuses to run when two environments point at the same database, and `blog_public` (search engine visibility) is never overwritten.
 
-Measured on a real multisite (production to local over the internet, one 26-table subsite with 315 MB of media): database in 0.5 s, media in 26 s, 37 s end to end. A repeat run with nothing changed finishes in 2.5 s.
+Measured on a real multisite (production to local over the internet, one 26-table subsite with 315 MB of media): database in 0.5s, media in 26s, 37s end-to-end. A repeat run with nothing changed finishes in 2.5s. And this will only get faster as this package matures.
 
 ## Install
 
