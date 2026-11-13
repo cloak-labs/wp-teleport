@@ -142,6 +142,7 @@ type Run struct {
 	RolledBack    bool      `json:"rolled_back"`
 	// AlsoRolledBack lists newer migrations undone first by a rollback.
 	AlsoRolledBack []string `json:"also_rolled_back,omitempty"`
+	Warnings       []string `json:"warnings,omitempty"`
 }
 
 type Lock struct {

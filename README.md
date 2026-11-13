@@ -12,6 +12,25 @@ teleport wp production plugin list --url=example.com/shop
 
 Agents and scripts: pass `--json` (progress stays on stderr), `--confirm=<env>` or `TELEPORT_CONFIRM=<env>` for protected destinations, and `--verify` to fail the run if leftover source URLs or broken serialized data remain.
 
+Integrations can use `capabilities --json` to discover environment names,
+protection flags, retention, and the integration API version without connecting.
+A copy preview (`sync ... --dry-run --json`) includes a `fingerprint`. Pass it as
+`--expect-plan=<fingerprint>` to refuse a copy if the configured operation or
+selected database table checksums changed. Files are not snapshots; concurrent
+content changes after the final check remain possible.
+
+`rollback <env> <run-id> --dry-run --sites=<slug> --json` previews the complete
+rollback chain and validates its backup tables. `--sites` refuses a chain that
+touches any other site or network tables. Pass the returned fingerprint through
+`--expect-plan` when executing the restore. Rollback uses the destination migration
+lock. As before, rollback restores database tables only, not media files.
+After restoring tables it flushes the WordPress cache. A failed flush is included
+in the JSON result's `warnings`; it does not conceal the completed database restore.
+
+Failed migration JSON is one document, including available partial results,
+`error`, and `database_committed`. A failed verification after a swap does not
+mean that the destination was unchanged. Keep this evidence in operation history.
+
 ## Why
 
 WP Migrate DB Pro sends data through PHP over HTTP in small chunks, and a migration writes over live tables as it goes. teleport takes a different approach:

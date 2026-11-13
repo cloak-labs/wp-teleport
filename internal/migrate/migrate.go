@@ -34,22 +34,27 @@ type Options struct {
 	ForceUnlock bool
 	Parallel    int
 	Verify      bool
+	ExpectPlan  string
 }
 
 type Result struct {
-	OK       bool           `json:"ok"`
-	Run      string         `json:"run"`
-	From     string         `json:"from"`
-	To       string         `json:"to"`
-	DryRun   bool           `json:"dry_run,omitempty"`
-	Plan     *plan.Plan     `json:"plan"`
-	Created  []string       `json:"created_sites,omitempty"`
-	DB       *db.Result     `json:"db,omitempty"`
-	Skipped  int            `json:"unchanged_tables"`
-	Files    []files.Result `json:"files,omitempty"`
-	Backup   bool           `json:"backup"`
-	Verify   *VerifyResult  `json:"verify,omitempty"`
-	Duration float64        `json:"duration_seconds"`
+	OK                bool           `json:"ok"`
+	Run               string         `json:"run"`
+	From              string         `json:"from"`
+	To                string         `json:"to"`
+	DryRun            bool           `json:"dry_run,omitempty"`
+	Plan              *plan.Plan     `json:"plan"`
+	Created           []string       `json:"created_sites,omitempty"`
+	DB                *db.Result     `json:"db,omitempty"`
+	Skipped           int            `json:"unchanged_tables"`
+	Files             []files.Result `json:"files,omitempty"`
+	Backup            bool           `json:"backup"`
+	Verify            *VerifyResult  `json:"verify,omitempty"`
+	Duration          float64        `json:"duration_seconds"`
+	Fingerprint       string         `json:"fingerprint,omitempty"`
+	Error             string         `json:"error,omitempty"`
+	DatabaseCommitted bool           `json:"database_committed"`
+	Warnings          []string       `json:"warnings,omitempty"`
 }
 
 // Side is a connected environment.
@@ -154,12 +159,21 @@ func Run(ctx context.Context, cfg *config.Config, u *ui.UI, from, to string, sel
 		}
 	}
 	printPlan(u, src, dst, p, sel, cfg, opt)
+	if opt.DryRun || opt.ExpectPlan != "" {
+		res.Fingerprint, err = fingerprint(ctx, cfg, src, dst, p, sel)
+		if err != nil {
+			return res, err
+		}
+		if opt.ExpectPlan != "" && opt.ExpectPlan != res.Fingerprint {
+			return res, fmt.Errorf("migration plan changed since preview; create a new preview before writing")
+		}
+	}
 
 	if opt.DryRun {
 		for _, job := range p.Files {
 			r, err := files.Transfer(ctx, fileSide(src), fileSide(dst), job, files.Options{Parallel: 1, DryRun: true, Rsync: transport.HostRsync(), UI: u})
 			if err != nil {
-				u.Warn("%s: %v", job.Label, err)
+				return res, fmt.Errorf("previewing %s: %w", job.Label, err)
 			}
 			res.Files = append(res.Files, r)
 		}
@@ -326,6 +340,15 @@ func execute(ctx context.Context, cfg *config.Config, u *ui.UI, from source, dst
 		}
 	}()
 
+	if opt.ExpectPlan != "" && src != nil {
+		current, fingerprintErr := fingerprint(ctx, cfg, src, dst, p, sel)
+		if fingerprintErr != nil {
+			return fingerprintErr
+		}
+		if current != opt.ExpectPlan {
+			return fmt.Errorf("migration plan changed while acquiring the destination lock; create a new preview")
+		}
+	}
 	if err := runHooks(ctx, u, dst, p, append(append([]string{}, cfg.Hooks.Before...), dst.Env.Hooks.Before...), res); err != nil {
 		return err
 	}
@@ -402,6 +425,7 @@ func execute(ctx context.Context, cfg *config.Config, u *ui.UI, from source, dst
 			return err
 		}
 		swapped = true
+		res.DatabaseCommitted = true
 		if src != nil {
 			agent.Call(context.WithoutCancel(ctx), src.Env, "abort", map[string]any{"cleanup": run}, nil)
 		}
@@ -441,9 +465,11 @@ func execute(ctx context.Context, cfg *config.Config, u *ui.UI, from source, dst
 
 	if err := runHooks(ctx, u, dst, p, append(append([]string{}, cfg.Hooks.After...), dst.Env.Hooks.After...), res); err != nil {
 		u.Warn("%v", err)
+		res.Warnings = append(res.Warnings, err.Error())
 	}
 	if err := agent.Call(ctx, dst.Env, "unlock", nil, nil); err != nil {
 		u.Warn("could not release lock: %v", err)
+		res.Warnings = append(res.Warnings, "could not release destination lock: "+err.Error())
 	}
 	return nil
 }

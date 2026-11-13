@@ -11,7 +11,9 @@ x-db: &db
     MARIADB_USER: wp
     MARIADB_PASSWORD: wp
   healthcheck:
-    test: ["CMD-SHELL", "mysqladmin ping -uroot -proot 2>/dev/null || mariadb-admin ping -uroot -proot"]
+    # Initialization starts a temporary socket-only database. Wait for the final
+    # TCP server and the WordPress account before installing the fixtures.
+    test: ["CMD-SHELL", "mysql --protocol=TCP -h127.0.0.1 -uwp -pwp wp -e 'SELECT 1' 2>/dev/null || mariadb --protocol=TCP -h127.0.0.1 -uwp -pwp wp -e 'SELECT 1' 2>/dev/null"]
     interval: 2s
     retries: 60
 

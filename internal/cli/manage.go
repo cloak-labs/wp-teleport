@@ -29,6 +29,9 @@ func (a *app) env(name string) (*transport.Env, error) {
 
 func (a *app) rollbackCmd() *cobra.Command {
 	var confirm string
+	var dry bool
+	var sites []string
+	var expected string
 	cmd := &cobra.Command{
 		Use:   "rollback <env> [<run-id>]",
 		Short: "Swap the tables replaced by the last (or a given) migration back in",
@@ -37,10 +40,25 @@ func (a *app) rollbackCmd() *cobra.Command {
 			if err := a.load(); err != nil {
 				return err
 			}
-			return a.rollback(cmd.Context(), args[0], optional(args, 1), confirm)
+			if dry {
+				env, err := a.env(args[0])
+				if err != nil {
+					return err
+				}
+				var out map[string]any
+				if err := agent.Call(cmd.Context(), env, "rollback-plan", map[string]any{"run": optional(args, 1), "sites": sites}, &out); err != nil {
+					return err
+				}
+				a.u.Println("Rollback preview on %s: %v", env.Name, out["tables"])
+				return a.emit(out)
+			}
+			return a.rollbackScoped(cmd.Context(), args[0], optional(args, 1), confirm, sites, expected)
 		},
 	}
 	cmd.Flags().StringVar(&confirm, "confirm", "", "skip the typed confirmation for a protected environment by naming it (or TELEPORT_CONFIRM)")
+	cmd.Flags().BoolVar(&dry, "dry-run", false, "preview the complete rollback chain without writing")
+	cmd.Flags().StringSliceVar(&sites, "sites", nil, "refuse a rollback chain that affects any other site or network tables")
+	cmd.Flags().StringVar(&expected, "expect-plan", "", "require the preview fingerprint before restoring tables")
 	return cmd
 }
 
@@ -52,6 +70,10 @@ func optional(args []string, i int) string {
 }
 
 func (a *app) rollback(ctx context.Context, name, run, confirm string) error {
+	return a.rollbackScoped(ctx, name, run, confirm, nil, "")
+}
+
+func (a *app) rollbackScoped(ctx context.Context, name, run, confirm string, sites []string, expected string) error {
 	if confirm == "" {
 		confirm = os.Getenv("TELEPORT_CONFIRM")
 	}
@@ -67,8 +89,12 @@ func (a *app) rollback(ctx context.Context, name, run, confirm string) error {
 	var out struct {
 		Run agent.Run `json:"run"`
 	}
-	if err := agent.Call(ctx, env, "rollback", map[string]string{"run": run}, &out); err != nil {
+	if err := agent.Call(ctx, env, "rollback", map[string]any{"run": run, "sites": sites, "expect_plan": expected}, &out); err != nil {
 		return err
+	}
+	// SQL swaps bypass WordPress option and object-cache invalidation.
+	if _, err := env.Run(ctx, env.WPCmd()+" cache flush", nil); err != nil {
+		out.Run.Warnings = append(out.Run.Warnings, "Database restored, but WordPress cache flush failed: "+err.Error())
 	}
 	if len(out.Run.AlsoRolledBack) > 0 {
 		a.u.Done("first rolled back the newer migrations %s", strings.Join(out.Run.AlsoRolledBack, ", "))

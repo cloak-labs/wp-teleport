@@ -75,6 +75,7 @@ Environments live in teleport.yml (searched upward from the current directory).`
 		a.doctorCmd(),
 		a.sitesCmd(),
 		a.envsCmd(),
+		a.capabilitiesCmd(),
 		a.unlockCmd(),
 		a.initCmd(),
 		a.exportCmd(),
@@ -159,6 +160,7 @@ func bindOptions(cmd *cobra.Command, o *migrate.Options) {
 	fl.BoolVar(&o.ForceUnlock, "force-unlock", false, "take over a lock left by another migration")
 	fl.IntVarP(&o.Parallel, "parallel", "j", 0, "parallel database streams and rsync shards (default from config, 4)")
 	fl.BoolVar(&o.Verify, "verify", false, "after swapping, check leftover source URLs, serialized data and home/siteurl")
+	fl.StringVar(&o.ExpectPlan, "expect-plan", "", "refuse to write if the database plan/checksums differ from this preview fingerprint")
 }
 
 func (a *app) migrateCmd(use, short string, route func([]string) (string, string), nargs int) *cobra.Command {
@@ -181,6 +183,12 @@ func (a *app) migrateCmd(use, short string, route func([]string) (string, string
 
 func (a *app) migrate(ctx context.Context, from, to string, sel config.Selection, opt migrate.Options) error {
 	res, err := migrate.Run(ctx, a.cfg, a.u, from, to, sel, opt)
+	if err != nil && res != nil && a.jsonOut {
+		res.Error = err.Error()
+		a.emit(res)
+		fmt.Fprintln(os.Stderr, err.Error())
+		return exitError{1}
+	}
 	if res != nil {
 		a.emit(res)
 	}

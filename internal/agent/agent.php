@@ -249,16 +249,22 @@ function manifest()
 function acquire_lock($lock)
 {
     ensure_meta();
+    // The primary key arbitrates concurrent clients in one atomic statement.
+    // Preserve an active owner's data unless --force-unlock was explicit.
+    $now = time();
+    $expired = $now - LOCK_TTL;
+    $data = wp_json_encode($lock);
+    $condition = !empty($lock['force']) ? '1=1' : "created <= $expired";
+    query(db()->prepare('INSERT INTO ' . META . " (id,created,data) VALUES ('lock',%d,%s)
+        ON DUPLICATE KEY UPDATE data=IF($condition,VALUES(data),data), created=IF($condition,VALUES(created),created)", $now, $data));
     $row = db()->get_row('SELECT created, data FROM ' . META . " WHERE id = 'lock'", ARRAY_A);
-    if ($row && (time() - (int) $row['created']) < LOCK_TTL && empty($lock['force'])) {
-        $held = json_decode($row['data'], true) ?: [];
+    $held = json_decode($row['data'] ?? '{}', true) ?: [];
+    if (($held['run'] ?? null) !== ($lock['run'] ?? null)) {
         throw new \RuntimeException(sprintf(
             'Another migration holds the lock (%s, started %ds ago). Wait, or re-run with --force-unlock.',
-            $held['by'] ?? 'unknown',
-            time() - (int) $row['created']
+            $held['by'] ?? 'unknown', $now - (int) ($row['created'] ?? $now)
         ));
     }
-    db()->replace(META, ['id' => 'lock', 'created' => time(), 'data' => wp_json_encode($lock)]);
 }
 
 function release_lock()
@@ -341,7 +347,7 @@ function swap($run, $pairs, $keep_backup, $description)
  * Roll back one migration. Newer migrations that are still applied are rolled
  * back first, newest to oldest, so the result is the state before $run_id.
  */
-function rollback($run_id)
+function rollback_plan($run_id, $sites = [])
 {
     $chain = [];
     $found = false;
@@ -372,12 +378,79 @@ function rollback($run_id)
             }
         }
     }
-    $run = null;
+    $tables = [];
+    $backups = [];
     foreach ($chain as $r) {
-        $run = rollback_one($r);
+        foreach ($r['swapped'] as $s) {
+            $tables[] = $s['live'];
+            $backups[] = $s['backup'];
+        }
+        $tables = array_merge($tables, $r['created_tables'] ?? []);
     }
-    $run['also_rolled_back'] = array_map(fn ($r) => $r['id'], array_slice($chain, 0, -1));
-    return $run;
+    $tables = array_values(array_unique($tables));
+    sort($tables);
+    $m = manifest();
+    $affected = [];
+    $unscoped = [];
+    foreach ($tables as $table) {
+        $match = null;
+        foreach ($m['sites'] as $site) {
+            // Match the longest prefix: wp_ must not claim wp_2_posts.
+            if (str_starts_with($table, $site['prefix']) && (!$match || strlen($site['prefix']) > strlen($match['prefix']))) {
+                $match = $site;
+            }
+        }
+        if ($match && !in_array($table, $m['global_tables'], true)) {
+            $slug = trim($match['path'], '/');
+            $slug = $slug === '' ? 'main' : basename($slug);
+            if ($slug === 'main' && $m['network'] && $match['id'] !== $m['network']['main_site']) {
+                $slug = $match['domain'];
+                $suffix = '.' . preg_replace('/^www\./', '', $m['network']['domain']);
+                if (str_ends_with($slug, $suffix)) {
+                    $sub = substr($slug, 0, -strlen($suffix));
+                    if (!str_contains($sub, '.')) { $slug = $sub; }
+                }
+            }
+            $affected[$slug] = true;
+        } else {
+            $unscoped[] = $table;
+        }
+    }
+    $affected = array_keys($affected);
+    sort($affected);
+    if ($sites && ($unscoped || array_diff($affected, $sites))) {
+        throw new \RuntimeException('Rollback also affects other sites or network tables. Newer migrations must be handled separately.');
+    }
+    $sums = checksums(array_values(array_unique(array_merge($tables, $backups))));
+    ksort($sums);
+    foreach (array_merge(array_intersect($tables, array_keys($existing)), $backups) as $table) {
+        if (($sums[$table] ?? '') === '') {
+            throw new \RuntimeException("Cannot fingerprint table $table: checksum unavailable.");
+        }
+    }
+    $plan = ['run' => $chain[count($chain) - 1]['id'], 'chain' => $chain,
+        'sites' => $affected, 'tables' => $tables, 'files_restored' => false];
+    $plan['fingerprint'] = hash('sha256', json_encode([$plan, $sums]));
+    return $plan;
+}
+
+function rollback($run_id, $sites = [], $expected = '')
+{
+    acquire_lock(['by' => 'teleport rollback', 'run' => bin2hex(random_bytes(8))]);
+    try {
+        $plan = rollback_plan($run_id, $sites);
+        if ($expected !== '' && !hash_equals($expected, $plan['fingerprint'])) {
+            throw new \RuntimeException('Rollback plan changed since preview; create a new preview before writing.');
+        }
+        $run = null;
+        foreach ($plan['chain'] as $r) {
+            $run = rollback_one($r);
+        }
+        $run['also_rolled_back'] = array_map(fn ($r) => $r['id'], array_slice($plan['chain'], 0, -1));
+        return $run;
+    } finally {
+        release_lock();
+    }
 }
 
 function rollback_one($run)
@@ -737,7 +810,10 @@ try {
             out(['ok' => true]);
             break;
         case 'rollback':
-            out(['run' => rollback($input['run'] ?? '')]);
+            out(['run' => rollback($input['run'] ?? '', $input['sites'] ?? [], $input['expect_plan'] ?? '')]);
+            break;
+        case 'rollback-plan':
+            out(rollback_plan($input['run'] ?? '', $input['sites'] ?? []));
             break;
         case 'runs':
             out(['runs' => meta_rows()]);
